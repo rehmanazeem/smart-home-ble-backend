@@ -4,13 +4,14 @@ devices.py
 This module provides the BLEController class for managing Bluetooth Low Energy (BLE) connections
 and controlling an LED strip device. It supports scanning, connecting, sending color/state commands,
 tracking current state and color, and ensuring robust reconnection logic.
-
-Author: Your Name
-Date: 2025-09-17
 """
 
 import logging
+from typing import Any, Callable
+
 from bleak import BleakClient, BleakScanner
+
+from library.config import parse_rgb_to_bytes
 
 logger = logging.getLogger("library.devices")
 
@@ -30,7 +31,8 @@ class BLEController:
         current_color (str or tuple): Current color in RGB format.
     """
 
-    def __init__(self, device_name, char_uuid, cmd_on, cmd_off, color_cmds, device_address=None, current_state="OFF", current_color=(0,0,0)):
+    def __init__(self, device_name, char_uuid, cmd_on, cmd_off, color_cmds, device_address=None, current_state="OFF", current_color=(0,0,0),
+                 client_factory: Callable[..., Any] = BleakClient, scanner: Any = BleakScanner):
         """
         Initialize BLEController.
 
@@ -41,6 +43,8 @@ class BLEController:
             cmd_off (bytes): OFF command.
             color_cmds (dict): Dictionary of color commands.
             device_address (str, optional): BLE device address for direct connection.
+            client_factory: Builds the BLE client from an address (seam for tests).
+            scanner: Object with an async ``discover(timeout=...)`` (seam for tests).
         """
         # Store initialization parameters
         self.device_name = device_name
@@ -49,6 +53,8 @@ class BLEController:
         self.cmd_off = cmd_off
         self.color_cmds = color_cmds
         self.client = None
+        self._client_factory = client_factory
+        self._scanner = scanner
         self.address = device_address
         self.current_state = current_state
         self.current_color = current_color
@@ -67,7 +73,7 @@ class BLEController:
         # If address is known, connect directly for faster startup
         if self.address:
             logger.info(f"[BLE] Connecting directly to address: {self.address}")
-            self.client = BleakClient(self.address)
+            self.client = self._client_factory(self.address)
             try:
                 await self.client.connect(timeout=timeout)
             except Exception as e:
@@ -81,7 +87,7 @@ class BLEController:
             return True
         # Otherwise, scan for devices by name
         logger.info(f"[BLE] Scanning for BLE devices...")
-        devices = await BleakScanner.discover(timeout=timeout)
+        devices = await self._scanner.discover(timeout=timeout)
         # Log all found devices
         for d in devices:
             logger.info(f"[BLE] Found device: {d.name} [{d.address}]")
@@ -92,7 +98,7 @@ class BLEController:
             return False
         # Store address and connect
         self.address = target.address
-        self.client = BleakClient(self.address)
+        self.client = self._client_factory(self.address)
         try:
             await self.client.connect(timeout=timeout)
         except Exception as e:
@@ -146,7 +152,7 @@ class BLEController:
             return "off"
         # Handle RGB tuple command
         elif isinstance(command, tuple) and len(command) == 3:
-            await self.client.write_gatt_char(self.char_uuid, self.parse_rgb_to_bytes(*command))
+            await self.client.write_gatt_char(self.char_uuid, parse_rgb_to_bytes(*command))
             self.current_color = f"{command}"
             return f"{command}"
         else:
@@ -185,11 +191,3 @@ class BLEController:
                 logger.error("[BLE] No address available for reconnection.")
                 return False
         return True
-
-    # Convert RGB values to bytes command
-    def parse_rgb_to_bytes(self, r, g, b):
-        """Return bytes command for given RGB values (0-255 each)."""
-        r = max(0, min(255, r))
-        g = max(0, min(255, g))
-        b = max(0, min(255, b))
-        return bytes([0x7e, 0x07, 0x05, 0x03, r, g, b, 0x02, 0xef])

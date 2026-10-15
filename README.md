@@ -50,15 +50,20 @@ flowchart LR
     Main <-- load/save --> State[(strip_state.json)]
 ```
 
-- `main.py` – sets up logging, loads persisted state, wires the BLE and MQTT
-  controllers together, and runs the command loop.
+- `main.py` – entry point: loads persisted state, wires the BLE and MQTT
+  controllers together, and runs the command loop (`handle_command`).
+- `library/commands.py` – pure parsing of MQTT payloads (`get`, `on`/`off`,
+  RGB tuple) and of BLE results.
 - `library/config.py` – device name, characteristic UUID, command bytes, MQTT
-  config, and topic names.
+  config, topic names, and `parse_rgb_to_bytes`.
 - `library/devices.py` – `BLEController`: scan/connect, send commands,
-  reconnect, and track current state/color.
+  reconnect, and track current state/color. The bleak client and scanner are
+  injectable.
 - `library/mqtt.py` – `MQTTController`: subscribe, publish, and bridge messages
-  into the asyncio command queue.
+  into the asyncio command queue. The paho client factory is injectable.
 - `library/persistence.py` – load/save strip state to JSON.
+- `library/logging_setup.py` – stdout + timestamped file logging.
+- `tests/` – pytest suite using fake BLE/MQTT objects (no hardware needed).
 
 ## Setup & Run
 
@@ -79,6 +84,8 @@ python main.py
 On Linux, `bleak` uses BlueZ via `dbus-fast`. On macOS it uses CoreBluetooth.
 MQTT broker credentials and the target BLE device are defined in
 `library/config.py`.
+
+Run the tests with `pip install pytest && pytest`.
 
 > Note: a timestamped log file is created on each run under
 > `Logs/<YYYY-MM-DD>/<HH-MM-SS>.log`. These files are generated at runtime and
@@ -113,6 +120,8 @@ The backend publishes the resulting state to `home/strip/state` and color to
   would require generalizing the controllers and topic scheme.
 - **Command parsing** uses `ast.literal_eval` on incoming MQTT payloads;
   consider stricter validation/whitelisting of inputs.
-- **No automated tests** – unit/integration tests would improve reliability.
+- **Tests cover pure logic only** – command parsing, RGB bytes, BLE command
+  mapping, the command handler and persistence run against fakes; real BLE and
+  MQTT are not exercised by the suite.
 - **Color persistence** stores RGB as a stringified tuple; a structured schema
   would be cleaner.

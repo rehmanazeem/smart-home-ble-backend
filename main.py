@@ -1,53 +1,66 @@
-from ast import literal_eval
+"""Entry point: bridge MQTT commands to a BLE LED strip."""
+
 import asyncio
 import logging
+import os
+
+from library.commands import Command, is_color_result, parse_command
 from library.config import (
     DEVICE_NAME, CHAR_UUID, CMD_ON, CMD_OFF, COLOR_CMDS,
-    MQTT_CONFIG, CMD_TOPIC, STATE_TOPIC, COLOR_TOPIC
+    MQTT_CONFIG, CMD_TOPIC, STATE_TOPIC, COLOR_TOPIC,
 )
 from library.devices import BLEController
+from library.logging_setup import setup_logging
 from library.mqtt import MQTTController
 from library.persistence import load_strip_state, save_strip_state
-import os
-from datetime import datetime
 
-# Create log directory structure: Logs > day-level dir > timestamp.log file
-log_base_dir = "Logs"
-log_day_dir = os.path.join(log_base_dir, datetime.now().strftime("%Y-%m-%d"))
-os.makedirs(log_day_dir, exist_ok=True)
-log_file = os.path.join(log_day_dir, f"{datetime.now().strftime('%H-%M-%S')}.log")
+MAX_BLE_FAILURES = 10
 
-# Remove basicConfig and set up handlers manually
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
 
-file_handler = logging.FileHandler(log_file)
-file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s:%(name)s:%(message)s"))
-root_logger.addHandler(file_handler)
+async def send_parsed(ble: BLEController, command: str) -> str:
+    """Parse an MQTT payload and send it to the strip; return the BLE result."""
+    parsed: Command | None = parse_command(command)
+    if parsed is None:
+        logging.error(f"Invalid command format: {command}")
+        return "error"
+    if isinstance(parsed, tuple):
+        return await ble.send_command(parsed)
+    try:
+        return await ble.send_command(parsed)
+    except Exception as e:
+        logging.error(f"BLE error: {e}")
+        return "error"
 
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s:%(name)s:%(message)s"))
-root_logger.addHandler(stream_handler)
 
-# Force log file creation immediately
-logging.info("Logging initialized. Log file: %s", log_file)
+def publish_result(result: str, ble: BLEController, mqtt: MQTTController) -> None:
+    """Publish and persist the outcome of a command."""
+    if result in ("on", "off"):
+        mqtt.publish_state(ble.current_state)
+        save_strip_state(ble.current_state, ble.current_color)
+    elif is_color_result(result):
+        mqtt.publish_color(f"{ble.current_color}")
+        save_strip_state(ble.current_state, ble.current_color)
+    else:
+        logging.error(f"Unknown state: {result}")
+        mqtt.publish_state("unknown")
 
-# Load persisted state and color at startup
-strip_data = load_strip_state()
-strip_state = strip_data["state"]
-strip_color = strip_data["color"]
 
-async def main():
-    """Run the backend: connect over BLE, start MQTT, and process commands.
+async def handle_command(command: str, ble: BLEController, mqtt: MQTTController) -> None:
+    """Apply one MQTT command ("get", on/off, or RGB tuple) and publish the result."""
+    if command == "get":
+        mqtt.publish_state(ble.current_state)
+        mqtt.publish_color(ble.current_color)
+        return
+    publish_result(await send_parsed(ble, command), ble, mqtt)
 
-    Wires the BLE and MQTT controllers together, then loops over commands
-    received from MQTT (on/off, RGB tuple, or "get"), applying them to the
-    device and publishing/persisting the resulting state and color.
-    """
-    command_queue = asyncio.Queue()
+
+async def main() -> None:
+    """Connect over BLE, start MQTT, and process queued commands until stopped."""
+    strip_data = load_strip_state()
+    command_queue: asyncio.Queue = asyncio.Queue()
     ble = BLEController(
         DEVICE_NAME, CHAR_UUID, CMD_ON, CMD_OFF, COLOR_CMDS,
-        current_state=strip_state, current_color=strip_color,
+        current_state=strip_data["state"], current_color=strip_data["color"],
         # device_address="XX:XX:XX:XX:XX:XX"
     )
     mqtt = MQTTController(MQTT_CONFIG, CMD_TOPIC, STATE_TOPIC, COLOR_TOPIC, command_queue)
@@ -57,59 +70,28 @@ async def main():
 
     mqtt.start(asyncio.get_event_loop())
 
-
+    ble_retry_count = 5  # original starting value, kept as-is
     try:
         while True:
             command = await command_queue.get()
             # Ensure BLE connection before any command
-            ble_retry_count = getattr(main, "ble_retry_count", 5)
             if not await ble.ensure_connected(timeout=10.0):
                 ble_retry_count += 1
-                setattr(main, "ble_retry_count", ble_retry_count)
-                logging.error(f"BLE connection could not be established. Skipping command. Retry {ble_retry_count}/10")
-                if ble_retry_count >= 10:
-                    logging.error("BLE connection failed 10 times. Exiting application.")
+                logging.error(f"BLE connection could not be established. Skipping command. Retry {ble_retry_count}/{MAX_BLE_FAILURES}")
+                if ble_retry_count >= MAX_BLE_FAILURES:
+                    logging.error(f"BLE connection failed {MAX_BLE_FAILURES} times. Exiting application.")
                     os._exit(1)
                 continue
-            else:
-                setattr(main, "ble_retry_count", 0)
-
-            if command == "get":
-                mqtt.publish_state(ble.current_state)  # Publish actual state
-                mqtt.publish_color(ble.current_color)  # Publish RGB
-                continue
-            else:
-                try:
-                    command_eval = literal_eval(command)
-                    if isinstance(command_eval, tuple) and len(command_eval) == 3 and all(isinstance(c, int) and 0 <= c <= 255 for c in command_eval):
-                        state = await ble.send_command(command_eval)
-                    elif command in ["on", "off"]:
-                        state = await ble.send_command(command)
-                    else:
-                        logging.error(f"Invalid command format: {command}")
-                        state = "error"
-                except (ValueError, SyntaxError):
-                    try:
-                        state = await ble.send_command(command)
-                    except Exception as e:
-                        logging.error(f"BLE error: {e}")
-                        state = "error"
-
-            if state in ["on", "off"]:
-                mqtt.publish_state(ble.current_state)
-                save_strip_state(ble.current_state, ble.current_color)  # Save state
-            elif isinstance(literal_eval(state), tuple) and len(literal_eval(state)) == 3:
-                mqtt.publish_color(f"{ble.current_color}")
-                save_strip_state(ble.current_state, ble.current_color)  # Save color
-            else:
-                logging.error(f"Unknown state: {state}")
-                mqtt.publish_state("unknown")
+            ble_retry_count = 0
+            await handle_command(command, ble, mqtt)
     except (asyncio.CancelledError, KeyboardInterrupt):
         logging.info("Keyboard interrupt received. Shutting down gracefully...")
     finally:
         await ble.disconnect()
 
+
 if __name__ == "__main__":
+    setup_logging()
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

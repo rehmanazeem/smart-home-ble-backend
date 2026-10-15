@@ -26,7 +26,7 @@ CMD_TOPIC = "home/strip/set"
 STATE_TOPIC = "home/strip/state"
 COLOR_TOPIC = "home/strip/color"
 
-def parse_rgb_to_bytes(r, g, b):
+def parse_rgb_to_bytes(r: int, g: int, b: int) -> bytes:
     """Return bytes command for given RGB values (0-255 each)."""
     r = max(0, min(255, r))
     g = max(0, min(255, g))

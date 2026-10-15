@@ -4,9 +4,6 @@ mqtt.py
 This module provides the MQTTController class for managing MQTT connections,
 subscribing to command topics, publishing state and color updates, and
 integrating with an asyncio event loop for command handling.
-
-Author: Your Name
-Date: 2025-09-17
 """
 
 import logging
@@ -32,7 +29,7 @@ class MQTTController:
         pub_client (paho.Client): MQTT client for publishing.
     """
 
-    def __init__(self, config, cmd_topic, state_topic, color_topic, command_queue):
+    def __init__(self, config, cmd_topic, state_topic, color_topic, command_queue, client_factory=paho.Client):
         """
         Initialize MQTTController.
 
@@ -42,14 +39,15 @@ class MQTTController:
             state_topic (str): State topic.
             color_topic (str): Color topic.
             command_queue (asyncio.Queue): Queue for commands.
+            client_factory: Builds the paho clients (seam for tests).
         """
         self.config = config
         self.cmd_topic = cmd_topic
         self.state_topic = state_topic
         self.color_topic = color_topic
         self.command_queue = command_queue
-        self.client = paho.Client()
-        self.pub_client = paho.Client()
+        self.client = client_factory()
+        self.pub_client = client_factory()
 
     def start(self, loop):
         """
