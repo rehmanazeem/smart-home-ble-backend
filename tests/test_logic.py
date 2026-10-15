@@ -59,8 +59,7 @@ def test_parse_command():
 def test_is_color_result():
     assert is_color_result("(1, 2, 3)")
     assert not is_color_result("(1, 2)")
-    with pytest.raises(ValueError):
-        is_color_result("unknown")
+    assert not is_color_result("unknown")  # non-literal results must not crash the loop
 
 
 def test_rgb_bytes_clamped():
@@ -115,3 +114,26 @@ def test_persistence_roundtrip(tmp_path, monkeypatch):
     persistence.save_strip_state("ON", "(1, 2, 3)")
     assert persistence.load_strip_state() == {"state": "ON", "color": "(1, 2, 3)"}
     assert json.loads((tmp_path / "data" / "s.json").read_text())["state"] == "ON"
+
+
+def test_default_mqtt_client_builds_under_paho_2():
+    from library.mqtt import _default_client
+
+    assert _default_client() is not None  # raised ValueError before the callback-version fix
+
+
+def test_unknown_command_is_reported_not_fatal():
+    from library.config import COLOR_CMDS  # noqa: F401  (import check only)
+    from main import publish_result
+
+    published = []
+
+    class M:
+        def publish_state(self, s): published.append(s)
+        def publish_color(self, c): published.append(c)
+
+    class B:
+        current_state, current_color = "ON", "(1, 2, 3)"
+
+    publish_result("unknown", B(), M())
+    assert published == ["unknown"]

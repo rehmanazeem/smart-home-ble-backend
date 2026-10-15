@@ -31,8 +31,11 @@ def parse_command(payload: str) -> Optional[Command]:
 def is_color_result(result: str) -> bool:
     """True if a BLE result string is a stringified 3-tuple, e.g. "(1, 2, 3)".
 
-    Like the original loop, this raises ValueError/SyntaxError for results that
-    are not Python literals (e.g. "unknown", "error").
+    Results that are not Python literals (e.g. "unknown", "error") are simply
+    not colours, so the caller can log them instead of crashing the loop.
     """
-    value = literal_eval(result)
+    try:
+        value = literal_eval(result)
+    except (ValueError, SyntaxError):
+        return False
     return isinstance(value, tuple) and len(value) == 3

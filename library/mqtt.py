@@ -15,6 +15,11 @@ import asyncio
 logger = logging.getLogger("library.mqtt")
 
 
+def _default_client() -> paho.Client:
+    """paho-mqtt 2.x requires an explicit callback API version."""
+    return paho.Client(paho.CallbackAPIVersion.VERSION2)
+
+
 class MQTTController:
     """
     MQTTController manages MQTT connections, subscriptions, and publishing for the LED strip.
@@ -29,7 +34,7 @@ class MQTTController:
         pub_client (paho.Client): MQTT client for publishing.
     """
 
-    def __init__(self, config, cmd_topic, state_topic, color_topic, command_queue, client_factory=paho.Client):
+    def __init__(self, config, cmd_topic, state_topic, color_topic, command_queue, client_factory=_default_client):
         """
         Initialize MQTTController.
 
@@ -71,7 +76,7 @@ class MQTTController:
         self.pub_client.connect(self.config["host"], self.config["port"])
         self.pub_client.loop_start()
 
-    def on_connect(self, client, userdata, flags, rc):
+    def on_connect(self, client, userdata, flags, reason_code, properties=None):
         """
         Callback for MQTT connection event.
 
@@ -79,9 +84,10 @@ class MQTTController:
             client (paho.Client): The MQTT client.
             userdata (dict): User data.
             flags (dict): Connection flags.
-            rc (int): Connection result code.
+            reason_code (paho.ReasonCode): Connection result.
+            properties: MQTT v5 properties (unused).
         """
-        logger.info(f"Connected to MQTT broker with result code {rc}")
+        logger.info(f"Connected to MQTT broker with result code {reason_code}")
         client.subscribe(self.cmd_topic)
         # Optionally subscribe to state topic if needed
         # client.subscribe(self.color_topic)
