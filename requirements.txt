@@ -1,0 +1,7 @@
+# Direct third-party imports
+bleak==1.1.1          # BLE client/scanner (library/devices.py)
+paho-mqtt==2.1.0      # MQTT client (library/mqtt.py)
+
+# Transitive (required by bleak on Linux/BlueZ backends)
+dbus-fast==2.44.3
+typing_extensions==4.15.0
