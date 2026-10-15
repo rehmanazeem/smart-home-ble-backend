@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from bleak import BleakClient, BleakScanner
 
+from library.commands import parse_rgb
 from library.config import parse_rgb_to_bytes
 
 logger = logging.getLogger("library.devices")
@@ -70,61 +71,47 @@ class BLEController:
         Returns:
             bool: True if connected, False otherwise.
         """
-        # If address is known, connect directly for faster startup
         if self.address:
+            # Address known: skip the scan for a faster start
             logger.info(f"[BLE] Connecting directly to address: {self.address}")
-            self.client = self._client_factory(self.address)
-            try:
-                await self.client.connect(timeout=timeout)
-            except Exception as e:
-                logger.error(f"[BLE] Connection failed: {e}")
+        else:
+            logger.info("[BLE] Scanning for BLE devices...")
+            devices = await self._scanner.discover(timeout=timeout)
+            for d in devices:
+                logger.info(f"[BLE] Found device: {d.name} [{d.address}]")
+            target = next((d for d in devices if d.name == self.device_name), None)
+            if not target:
+                logger.error(f"[BLE] Device '{self.device_name}' not found.")
                 return False
-            # Check connection status
-            if not self.client.is_connected:
-                logger.error("[BLE] Failed to connect to the LED strip.")
-                return False
-            logger.info("[BLE] Successfully connected to the LED strip.")
-            return True
-        # Otherwise, scan for devices by name
-        logger.info(f"[BLE] Scanning for BLE devices...")
-        devices = await self._scanner.discover(timeout=timeout)
-        # Log all found devices
-        for d in devices:
-            logger.info(f"[BLE] Found device: {d.name} [{d.address}]")
-        # Find target device by name
-        target = next((d for d in devices if d.name == self.device_name), None)
-        if not target:
-            logger.error(f"[BLE] Device '{self.device_name}' not found.")
-            return False
-        # Store address and connect
-        self.address = target.address
+            self.address = target.address
+
         self.client = self._client_factory(self.address)
         try:
             await self.client.connect(timeout=timeout)
         except Exception as e:
             logger.error(f"[BLE] Connection failed: {e}")
             return False
-        # Check connection status
         if not self.client.is_connected:
             logger.error("[BLE] Failed to connect to the LED strip.")
             return False
-        
+
         logger.info("[BLE] Successfully connected to the LED strip.")
-
-
-        # Set initial state and color after connecting
-        if self.current_state.upper() == "ON":
-            await self.send_command("on")
-            logger.info(f"Current state on connect: {self.current_state}")
-        else:
-            await self.send_command("off")
-            logger.info(f"Current state on connect: {self.current_state}")
-
-        if isinstance(self.current_color, tuple) and len(self.current_color) == 3:
-            await self.send_command(self.current_color)
-            logger.info(f"Current color on connect: {self.current_color}")
-
+        await self._restore_state()
         return True
+
+    async def _restore_state(self):
+        """Re-apply the persisted on/off state and colour after (re)connecting.
+
+        The colour is persisted as a string such as "(34, 255, 5)", so it is
+        parsed back to an RGB tuple before being sent.
+        """
+        await self.send_command("on" if str(self.current_state).upper() == "ON" else "off")
+        logger.info(f"Current state on connect: {self.current_state}")
+
+        color = parse_rgb(self.current_color)
+        if color is not None:
+            await self.send_command(color)
+            logger.info(f"Current color on connect: {color}")
 
     async def send_command(self, command):
         """
@@ -182,6 +169,8 @@ class BLEController:
             logger.info("[BLE] Not connected. Attempting to reconnect...")
             if self.address:
                 try:
+                    if self.client is None:  # never created (e.g. address given, first connect failed early)
+                        self.client = self._client_factory(self.address)
                     await self.client.connect(timeout=timeout)
                     logger.info("[BLE] Reconnected successfully.")
                 except Exception as e:

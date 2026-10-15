@@ -137,3 +137,37 @@ def test_unknown_command_is_reported_not_fatal():
 
     publish_result("unknown", B(), M())
     assert published == ["unknown"]
+
+
+def test_parse_rgb_accepts_stored_string_and_rejects_junk():
+    from library.commands import parse_rgb
+
+    assert parse_rgb("(34, 255, 5)") == (34, 255, 5)
+    assert parse_rgb((1, 2, 3)) == (1, 2, 3)
+    assert parse_rgb("(1, 2, 300)") is None and parse_rgb("red") is None and parse_rgb(None) is None
+
+
+def test_saved_colour_and_state_are_restored_on_connect_both_paths():
+    class Scanner:
+        class Dev:
+            name, address = "dev", "AA:BB:CC:DD:EE:FF"
+
+        @staticmethod
+        async def discover(timeout=None):
+            return [Scanner.Dev]
+
+    for address in (None, "AA:BB:CC:DD:EE:FF"):  # scan path and direct-address path
+        ble = BLEController("dev", CHAR_UUID, CMD_ON, CMD_OFF, {}, device_address=address,
+                            current_state="ON", current_color="(34, 255, 5)",
+                            client_factory=FakeClient, scanner=Scanner)
+        assert asyncio.run(ble.scan_and_connect()) is True
+        sent = [data for _, data in ble.client.writes]
+        assert sent == [CMD_ON, parse_rgb_to_bytes(34, 255, 5)]
+
+
+def test_ensure_connected_creates_missing_client():
+    ble = BLEController("dev", CHAR_UUID, CMD_ON, CMD_OFF, {}, device_address="AA:BB:CC:DD:EE:FF",
+                        client_factory=FakeClient)
+    assert ble.client is None
+    assert asyncio.run(ble.ensure_connected()) is True
+    assert isinstance(ble.client, FakeClient)

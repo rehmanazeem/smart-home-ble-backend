@@ -39,3 +39,21 @@ def is_color_result(result: str) -> bool:
     except (ValueError, SyntaxError):
         return False
     return isinstance(value, tuple) and len(value) == 3
+
+
+def parse_rgb(value: object) -> Optional[RGB]:
+    """Coerce a stored colour (tuple, or its string form "(r, g, b)") to a valid RGB tuple.
+
+    Persisted colours are saved as strings, so a restore after restart has to
+    parse them; returns None if ``value`` is not a valid colour.
+    """
+    if isinstance(value, str):
+        try:
+            value = literal_eval(value)
+        except (ValueError, SyntaxError):
+            return None
+    if isinstance(value, tuple) and len(value) == 3 and all(
+        isinstance(c, int) and 0 <= c <= 255 for c in value
+    ):
+        return value
+    return None
